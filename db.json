@@ -1,0 +1,49 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "title": "json-server",
+      "author": "typicode"
+    },
+    {
+      "name": "ganesh",
+      "email": "ganesh@tammina.com",
+      "password": "123456",
+      "confirmPassword": "123456",
+      "role": "Admin",
+      "id": 2
+    },
+    {
+      "name": "ganesh",
+      "email": "Ganesh@gmail.com",
+      "password": "123456",
+      "confirmPassword": "123456",
+      "role": "Employee",
+      "id": 3
+    },
+    {
+      "name": "Ram",
+      "email": "ram@gmail.com",
+      "password": "123456",
+      "role": "Employee",
+      "id": 4
+    },
+    {
+      "name": "Sai Chandu",
+      "email": "sai@gmail.cpm",
+      "password": "123456",
+      "role": "Employee",
+      "id": 5
+    }
+  ],
+  "comments": [
+    {
+      "id": 1,
+      "body": "some comment",
+      "postId": 1
+    }
+  ],
+  "profile": {
+    "name": "typicode"
+  }
+}

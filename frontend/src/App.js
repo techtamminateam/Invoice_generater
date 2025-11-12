@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Upload, Trash2, Plus, X, Loader2 } from 'lucide-react';
+import Login from './login';
+import Navbar from './navbar';
 
 const API_URL = 'http://localhost:5000/api';
 
@@ -8,6 +10,7 @@ export default function TimesheetApp() {
   const [companies, setCompanies] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
 
   const fetchCompanies = async () => {
     try {
@@ -57,9 +60,9 @@ export default function TimesheetApp() {
   }, [activeTab]);
 
   return (
-    <div className="p-8">
+    <><Navbar  /><div className="p-8">
       <h1 className="text-3xl font-bold mb-6 text-center text-blue-700">Timesheet Management System</h1>
-      
+
       <div className="flex gap-2 mb-6">
         {['onboard', 'invoice', 'history', 'companies'].map(tab => (
           <button
@@ -67,13 +70,12 @@ export default function TimesheetApp() {
             onClick={() => setActiveTab(tab)}
             className={`flex-1 px-4 py-2 rounded ${activeTab === tab ? 'bg-blue-500 text-white' : 'bg-blue-100'}`}
           >
-            {tab === 'onboard' ? 'Company Onboarding' : 
-             tab === 'invoice' ? 'Generate Invoice' : 
-             tab === 'history' ? 'Invoice History' : 'Companies List'}
+            {tab === 'onboard' ? 'Company Onboarding' :
+              tab === 'invoice' ? 'Generate Invoice' :
+                tab === 'history' ? 'Invoice History' : 'Companies List'}
           </button>
         ))}
       </div>
-
       {activeTab === 'onboard' && <CompanyOnboarding />}
       {activeTab === 'invoice' && <InvoiceGeneration companies={companies} />}
       {activeTab === 'history' && <InvoiceHistory />}
@@ -87,57 +89,57 @@ export default function TimesheetApp() {
             </div>
           )}
           {error && (
-          <div className="bg-blue-50 text-blue-700 p-4 rounded mb-4">
+            <div className="bg-blue-50 text-blue-700 p-4 rounded mb-4">
               Error: {error}
             </div>
           )}
           <div className="grid gap-4">
             {!loading && (companies && companies.length > 0 ? (
               companies.map(company => (
-              <div key={company.id} className="bg-white p-4 rounded-lg shadow-md">
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h3 className="text-xl font-semibold">{company.name}</h3>
-                    <p className="text-blue-700">{company.email}</p>
-                    <p className="text-blue-700">Address: {company.address}</p>
-                    <p className="text-blue-700">GST: {company.GST}</p>
-                    <p className="text-blue-700">SAC: {company.SAC}</p>
-                    <p className="text-blue-700">Contact: {company.contact_number}</p>
-                    <p className="text-blue-700">Type: {company.client_type}</p>
-                  </div>
-                  <button
-                    onClick={() => handleDeleteCompany(company.id, company.name)}
-                    className="text-blue-600 hover:text-blue-700 p-2 rounded hover:bg-blue-50 transition-colors"
-                    disabled={loading}
-                  >
-                    <Trash2 className="h-5 w-5" />
-                  </button>
-                </div>
-                {company.po_numbers && company.po_numbers.length > 0 && (
-                  <div className="mt-4">
-                    <h4 className="font-semibold mb-2">PO Numbers:</h4>
-                    <div className="grid gap-2">
-                      {company.po_numbers.map(po => (
-                        <div key={po.id} className="bg-blue-50 p-2 rounded">
-                          <p>PO Number: {po.po_number}</p>
-                          <p>Budget: ${po.monthly_budget}</p>
-                          {po.hourly_rate && <p>Hourly Rate: ${po.hourly_rate}</p>}
-                        </div>
-                      ))}
+                <div key={company.id} className="bg-white p-4 rounded-lg shadow-md">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h3 className="text-xl font-semibold">{company.name}</h3>
+                      <p className="text-blue-700">{company.email}</p>
+                      <p className="text-blue-700">Address: {company.address}</p>
+                      <p className="text-blue-700">GST: {company.GST}</p>
+                      <p className="text-blue-700">SAC: {company.SAC}</p>
+                      <p className="text-blue-700">Contact: {company.contact_number}</p>
+                      <p className="text-blue-700">Type: {company.client_type}</p>
                     </div>
+                    <button
+                      onClick={() => handleDeleteCompany(company.id, company.name)}
+                      className="text-blue-600 hover:text-blue-700 p-2 rounded hover:bg-blue-50 transition-colors"
+                      disabled={loading}
+                    >
+                      <Trash2 className="h-5 w-5" />
+                    </button>
                   </div>
-                )}
+                  {company.po_numbers && company.po_numbers.length > 0 && (
+                    <div className="mt-4">
+                      <h4 className="font-semibold mb-2">PO Numbers:</h4>
+                      <div className="grid gap-2">
+                        {company.po_numbers.map(po => (
+                          <div key={po.id} className="bg-blue-50 p-2 rounded">
+                            <p>PO Number: {po.po_number}</p>
+                            <p>Budget: ${po.monthly_budget}</p>
+                            {po.hourly_rate && <p>Hourly Rate: ${po.hourly_rate}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))
+            ) : (
+              <div className="text-center p-8 bg-blue-50 rounded">
+                <p className="text-blue-700">No companies found. Add a company using the Company Onboarding tab.</p>
               </div>
-            ))
-          ) : (
-            <div className="text-center p-8 bg-blue-50 rounded">
-              <p className="text-blue-700">No companies found. Add a company using the Company Onboarding tab.</p>
-            </div>
-          ))}
+            ))}
           </div>
         </div>
       )}
-    </div>
+    </div></>
   );
 }
 
@@ -568,5 +570,6 @@ function InvoiceHistory() {
         </div>
       )}
     </div>
+
   );
 }
