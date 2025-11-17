@@ -1,17 +1,19 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
-import './index.css';
-import App from './App';
-import reportWebVitals from './reportWebVitals';
+import React, { useState } from "react";
+import ReactDOM from "react-dom/client";
+import Login from "./login";
+import TimesheetApp from "./App";
 
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+function Main() {
+  const [user, setUser] = useState(JSON.parse(localStorage.getItem('loggedInUser')));
+  const handleLoginSuccess = (userData) => {
+    setUser(userData);
+    localStorage.setItem('loggedInUser', JSON.stringify(userData));
+  };
+  return user ? (
+    <TimesheetApp setUser={setUser} />
+  ) : (
+    <Login onLoginSuccess={handleLoginSuccess} />
+  );
+}
 
-// If you want to start measuring performance in your app, pass a function
-// to log results (for example: reportWebVitals(console.log))
-// or send to an analytics endpoint. Learn more: https://bit.ly/CRA-vitals
-reportWebVitals();
+ReactDOM.createRoot(document.getElementById("root")).render(<Main />);
