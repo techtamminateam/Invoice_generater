@@ -9,6 +9,16 @@ import json
 
 from utils.docx_filler import fill_document
 
+# For mail
+from flask import Flask, render_template, request
+from flask_mail import Mail, Message
+import os
+import dotenv
+import random
+
+dotenv.load_dotenv()
+sender_email = os.getenv('EMAIL')
+sender_password = os.getenv('PASSWORD')
 
 app = Flask(__name__)
 CORS(app)
@@ -19,8 +29,23 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['DOCUMENTS_FOLDER'] = 'documents'
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
+app.config['MAIL_SERVER'] = 'smtp.gmail.com'
+app.config['MAIL_PORT'] = 465
+app.config['MAIL_USERNAME'] = sender_email
+app.config['MAIL_PASSWORD'] = sender_password # Use the correct variable
+# Use SSL for port 465, disable TLS
+app.config['MAIL_USE_TLS'] = False
+app.config['MAIL_USE_SSL'] = True
+app.config['MAIL_DEFAULT_SENDER'] = sender_email
+
+mail = Mail(app)
+
+# Random verification code
+def generate_verifaction_code():
+    return str(random.randint(100000,999999))
 
 db = SQLAlchemy(app)
+print("✅ Database URI =>", app.config["SQLALCHEMY_DATABASE_URI"])
 
 #fill document function
 from docx import Document
@@ -197,6 +222,18 @@ for folder in [app.config['UPLOAD_FOLDER'], app.config['DOCUMENTS_FOLDER']]:
         os.makedirs(folder)
 
 # Database Models
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password = db.Column(db.String(120), nullable=False)
+    role = db.Column(db.String(50), default='Employee')
+    verification_code = db.Column(db.String(10))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+with app.app_context():
+    db.create_all()
+
 class Company(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(200), nullable=False)
@@ -206,11 +243,13 @@ class Company(db.Model):
     city = db.Column(db.String(50), nullable=False)
     state = db.Column(db.String(50), nullable=False)
     country = db.Column(db.String(50), nullable=False)
+    pin_code = db.Column(db.String(50), nullable=False)
     GST = db.Column(db.String(50))
     SAC = db.Column(db.String(50))
     email = db.Column(db.String(100), nullable=False)
     client_type = db.Column(db.String(50), nullable=False)  # same_state, other_state, foreign
     document_path = db.Column(db.String(500))
+    is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     po_numbers = db.relationship('PONumber', backref='company', lazy=True, cascade='all, delete-orphan')
 
@@ -244,6 +283,7 @@ class Invoice(db.Model):
     invoice_data = db.Column(db.Text)  # JSON data
     total_amount = db.Column(db.Float)
     sub_total = db.Column(db.Float)
+    paid_amount = db.Column(db.Float, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     month = db.Column(db.String(20))
     year = db.Column(db.Integer)
@@ -252,6 +292,22 @@ class Invoice(db.Model):
 # Create tables
 with app.app_context():
     db.create_all()
+    # Lightweight migration: add paid_amount column if missing
+    try:
+        insp = db.engine.execute("PRAGMA table_info(invoice)")
+        cols = [row[1] for row in insp]
+        if 'paid_amount' not in cols:
+            db.engine.execute("ALTER TABLE invoice ADD COLUMN paid_amount FLOAT DEFAULT 0")
+    except Exception:
+        pass
+    # Lightweight migration: add is_active column to company if missing
+    try:
+        insp2 = db.engine.execute("PRAGMA table_info(company)")
+        cols2 = [row[1] for row in insp2]
+        if 'is_active' not in cols2:
+            db.engine.execute("ALTER TABLE company ADD COLUMN is_active BOOLEAN DEFAULT 1")
+    except Exception:
+        pass
 
 # Helper functions
 def allowed_file(filename):
@@ -314,7 +370,7 @@ def process_timesheet(file_path, po_data, client_type):
             'calculation_type': 'daily'
         })
         
-        if client_type == 'same_state':
+        if client_type == 'other_state':
             igst_amount = total_amount * (po_data.igst / 100)
             sub_total = total_amount + igst_amount
             result.update({'IGST': igst_amount, 'sub_total': sub_total})
@@ -327,6 +383,176 @@ def process_timesheet(file_path, po_data, client_type):
     return result
 
 # API Endpoints
+
+from werkzeug.security import generate_password_hash, check_password_hash
+
+@app.route('/api/send-code', methods=['POST'])
+def send_verification_code():
+    """Send OTP verification code to user's email"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        
+        if not email:
+            return jsonify({'error': 'Email is required'}), 400
+        
+        # Check if user already exists with role other than Pending
+        existing_user = User.query.filter_by(email=email).first()
+        if existing_user and existing_user.role != 'Pending':
+            return jsonify({'error': 'User with this email already exists'}), 400
+        
+        # Generate 6-digit verification code
+        verification_code = generate_verifaction_code()
+        
+        # Create or update temporary user record
+        if existing_user and existing_user.role == 'Pending':
+            # Update existing temp user's code
+            existing_user.verification_code = verification_code
+        else:
+            # Create new temporary user with verification code
+            temp_user = User(
+                name='Pending',
+                email=email,
+                password='temp',  # Will be updated after verification
+                role='Pending',
+                verification_code=verification_code
+            )
+            db.session.add(temp_user)
+        
+        db.session.commit()
+        
+        # Send email with verification code
+        try:
+            msg = Message(
+                subject='Your Verification Code - Tech Tammina',
+                recipients=[email],
+                html=f'''
+                <html>
+                    <body style="font-family: Arial, sans-serif; padding: 20px; background-color: #f4f4f4;">
+                        <div style="max-width: 600px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                            <h2 style="color: #2563eb; text-align: center;">Tech Tammina</h2>
+                            <h3 style="color: #333;">Email Verification</h3>
+                            <p style="color: #666; font-size: 16px;">Hello,</p>
+                            <p style="color: #666; font-size: 16px;">Your verification code is:</p>
+                            <div style="background-color: #f0f9ff; padding: 20px; text-align: center; border-radius: 8px; margin: 20px 0;">
+                                <h1 style="color: #2563eb; font-size: 36px; margin: 0; letter-spacing: 5px;">{verification_code}</h1>
+                            </div>
+                            <p style="color: #666; font-size: 14px;">This code will expire in 10 minutes.</p>
+                            <p style="color: #666; font-size: 14px;">If you didn't request this code, please ignore this email.</p>
+                            <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+                            <p style="color: #999; font-size: 12px; text-align: center;">© 2025 Tech Tammina. All rights reserved.</p>
+                        </div>
+                    </body>
+                </html>
+                '''
+            )
+            mail.send(msg)
+            
+            return jsonify({
+                'message': 'Verification code sent successfully',
+                'email': email
+            }), 200
+            
+        except Exception as e:
+            print(f"❌ Error sending email: {str(e)}")
+            return jsonify({'error': 'Failed to send verification email. Please check email configuration.'}), 500
+            
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ Error in send_verification_code: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+# =====================================
+# REGISTER USER
+# =====================================
+@app.route('/api/register', methods=['POST'])
+def register_user():
+    """Create new user after OTP verification"""
+    try:
+        data = request.get_json()
+        name = data.get('name')
+        email = data.get('email')
+        password = data.get('password')
+        verification_code = data.get('verication_code')  # Note: keeping your typo for consistency
+        role = data.get('role', 'Employee')
+
+        # Validate required fields
+        if not all([name, email, password, verification_code]):
+            return jsonify({'error': 'All fields are required'}), 400
+
+        # Find user with matching email
+        temp_user = User.query.filter_by(email=email).first()
+        
+        if not temp_user:
+            return jsonify({'error': 'No verification code found for this email. Please send verification code first.'}), 400
+        
+        # Check if it's a real user (not pending)
+        if temp_user.role != 'Pending':
+            return jsonify({'error': 'User already exists with this email'}), 400
+        
+        # Verify the code matches
+        if temp_user.verification_code != verification_code:
+            return jsonify({'error': 'Invalid verification code'}), 400
+        
+        # Update the temporary user with real data
+        temp_user.name = name
+        temp_user.password = generate_password_hash(password)
+        temp_user.role = role
+        temp_user.verification_code = None  # Clear the verification code
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'User created successfully',
+            'user': {
+                'id': temp_user.id,
+                'name': temp_user.name,
+                'email': temp_user.email,
+                'role': temp_user.role
+            }
+        }), 201
+        
+    except Exception as e:
+        db.session.rollback()
+        print(f"❌ Error in register_user: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+# =====================================
+# LOGIN USER
+# =====================================
+@app.route('/api/login', methods=['POST'])
+def login_user():
+    """User login endpoint"""
+    try:
+        data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
+        
+        if not email or not password:
+            return jsonify({'error': 'Email and password are required'}), 400
+        
+        user = User.query.filter_by(email=email).first()
+        
+        # Check if user exists and is not pending
+        if not user or user.role == 'Pending':
+            return jsonify({'error': 'Invalid credentials'}), 401
+        
+        # Verify password
+        if not check_password_hash(user.password, password):
+            return jsonify({'error': 'Invalid credentials'}), 401
+        
+        return jsonify({
+            'id': user.id,
+            'name': user.name,
+            'email': user.email,
+            'role': user.role
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error in login_user: {str(e)}")
+        return jsonify({'error': 'Login failed'}), 500
 
 @app.route('/api/companies', methods=['POST'])
 def create_company():
@@ -346,10 +572,12 @@ def create_company():
             city = data.get('city'),
             state = data.get('state'),
             country = data.get('country'),
+            pin_code = data.get('pin_code'),
             GST=data.get('GST'),
             SAC=data.get('SAC'),
             email=data.get('email'),
-            client_type=data.get('client_type')
+            client_type=data.get('client_type'),
+            is_active=True if str(data.get('is_active', 'true')).lower() != 'false' else False
         )
         
         if file and allowed_file(file.filename):
@@ -415,6 +643,7 @@ def get_companies():
         'contact_number': c.contact_number,
         'email': c.email,
         'client_type': c.client_type,
+        'is_active': bool(c.is_active),
         'created_at': c.created_at.isoformat(),
         'po_count': len(c.po_numbers)
     } for c in companies])
@@ -428,6 +657,7 @@ def get_company(company_id):
         'contact_number': company.contact_number,
         'email': company.email,
         'client_type': company.client_type,
+        'is_active': bool(company.is_active),
         'created_at': company.created_at.isoformat(),
         'po_numbers': [{
             'id': po.id,
@@ -440,6 +670,20 @@ def get_company(company_id):
             'employees': [{'id': e.id, 'name': e.name, 'email': e.email} for e in po.employees]
         } for po in company.po_numbers]
     })
+
+@app.route('/api/companies/<int:company_id>/status', methods=['PUT'])
+def update_company_status(company_id):
+    try:
+        company = Company.query.get_or_404(company_id)
+        body = request.get_json(silent=True) or {}
+        if 'is_active' not in body:
+            return jsonify({'error': 'is_active is required'}), 400
+        company.is_active = bool(body.get('is_active'))
+        db.session.commit()
+        return jsonify({'id': company.id, 'is_active': bool(company.is_active)}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/companies/<int:company_id>/po-numbers', methods=['GET'])
 def get_po_numbers(company_id):
@@ -537,23 +781,43 @@ def generate_invoice():
 @app.route('/api/invoices', methods=['GET'])
 def get_invoices():
     invoices = Invoice.query.order_by(Invoice.created_at.desc()).all()
-    return jsonify([{
-        'id': inv.id,
-        'invoice_number': inv.invoice_number,
-        'company_name': inv.company.name,
-        'po_number': inv.po_number.po_number,
-        'total_amount': inv.total_amount,
-        'sub_total': inv.sub_total,
-        'month': inv.month,
-        'year': inv.year,
-        'created_at': inv.created_at.isoformat()
-    } for inv in invoices])
+    result = []
+    for inv in invoices:
+        client_type = inv.company.client_type
+        rate = 85
+        sub_total_in_inr = inv.sub_total * rate if client_type == 'foreign' and inv.sub_total is not None else inv.sub_total
+        total_amount_in_inr = inv.total_amount * rate if client_type == 'foreign' and inv.total_amount is not None else inv.total_amount
+        paid = inv.paid_amount or 0
+        due_in_inr = max((sub_total_in_inr or 0) - paid, 0)
+        result.append({
+            'id': inv.id,
+            'invoice_number': inv.invoice_number,
+            'company_name': inv.company.name,
+            'po_number': inv.po_number.po_number,
+            'client_type': client_type,
+            'total_amount': inv.total_amount,
+            'sub_total': inv.sub_total,
+            'total_amount_in_inr': total_amount_in_inr,
+            'sub_total_in_inr': sub_total_in_inr,
+            'paid_amount': paid,
+            'due_amount': due_in_inr,
+            'month': inv.month,
+            'year': inv.year,
+            'created_at': inv.created_at.isoformat()
+        })
+    return jsonify(result)
 
 @app.route('/api/invoices/<int:invoice_id>', methods=['GET'])
 def get_invoice(invoice_id):
     invoice = Invoice.query.get_or_404(invoice_id)
     invoice_data = json.loads(invoice.invoice_data)
-    
+    client_type = invoice.company.client_type
+    rate = 85
+    sub_total_in_inr = invoice.sub_total * rate if client_type == 'foreign' and invoice.sub_total is not None else invoice.sub_total
+    total_amount_in_inr = invoice.total_amount * rate if client_type == 'foreign' and invoice.total_amount is not None else invoice.total_amount
+    paid = invoice.paid_amount or 0
+    due_in_inr = max((sub_total_in_inr or 0) - paid, 0)
+
     return jsonify({
         'id': invoice.id,
         'invoice_number': invoice.invoice_number,
@@ -561,16 +825,48 @@ def get_invoice(invoice_id):
             'name': invoice.company.name,
             'email': invoice.company.email,
             'contact_number': invoice.company.contact_number,
-            'client_type': invoice.company.client_type
+            'client_type': client_type
         },
         'po_number': invoice.po_number.po_number,
         'employees': invoice_data['employees'],
         'grand_total': invoice_data['grand_total'],
+        'total_amount': invoice.total_amount,
+        'sub_total': invoice.sub_total,
+        'total_amount_in_inr': total_amount_in_inr,
+        'sub_total_in_inr': sub_total_in_inr,
+        'paid_amount': paid,
+        'due_amount': due_in_inr,
         'month': invoice.month,
         'year': invoice.year,
         'created_at': invoice.created_at.isoformat()
     })
 
+@app.route('/api/invoices/<int:invoice_id>/payment', methods=['PUT'])
+def update_invoice_payment(invoice_id):
+    try:
+        body = request.get_json(silent=True) or {}
+        paid_amount = body.get('paid_amount')
+        if paid_amount is None:
+            return jsonify({'error': 'paid_amount is required'}), 400
+        try:
+            paid_value = float(paid_amount)
+            if paid_value < 0:
+                return jsonify({'error': 'paid_amount cannot be negative'}), 400
+        except (TypeError, ValueError):
+            return jsonify({'error': 'paid_amount must be a number'}), 400
+
+        invoice = Invoice.query.get_or_404(invoice_id)
+        invoice.paid_amount = paid_value
+        db.session.commit()
+        due_amount = max((invoice.sub_total or 0) - (invoice.paid_amount or 0), 0)
+        return jsonify({
+            'id': invoice.id,
+            'paid_amount': invoice.paid_amount or 0,
+            'due_amount': due_amount
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({'status': 'ok'})
@@ -663,7 +959,7 @@ def download_invoice_docx(invoice_id):
                 per_day_budget = monthly_budget / 22 if monthly_budget else 0
                 total_amount = total_worked_days * per_day_budget
 
-                if client_type == "other_state":
+                if client_type == "same_state":
                     cgst_amt = total_amount * (cgst_rate / 100)
                     sgst_amt = total_amount * (sgst_rate / 100)
                     sub_total = total_amount + cgst_amt + sgst_amt
@@ -720,7 +1016,7 @@ def download_invoice_docx(invoice_id):
 
         # Generate DOCX
         if client_type == "other_state":
-            template_path = os.path.join("templates", "INR INVOICE.docx")
+            template_path = os.path.join("templates", "other_state.docx")
             data = {
                 "[Invoice number]": invoice.invoice_number,
                 "[Date]": invoice.created_at.strftime("%Y-%m-%d"),
@@ -733,11 +1029,10 @@ def download_invoice_docx(invoice_id):
                 "[city]" : company.city,
                 "[state]" : company.state,
                 "[country]" : company.country,
+                "[pin_code]" : company.pin_code,
                 "[GST]": company.GST,
                 "[SAC]": company.SAC,
-                "[sub_total]": f"₹{total_invoice_amount:,.2f}",  # Try without brackets
-                "[CGST]": f"₹{total_cgst:,.2f}",
-                "[SGST]": f"₹{total_sgst:,.2f}",
+                "[sub_total]": f"₹{total_invoice_amount:,.2f}",
                 "[IGST]": f"₹{total_igst:,.2f}",
                 "[TIA]": f"₹{grand_total:,.2f}"
             }
@@ -760,7 +1055,6 @@ def download_invoice_docx(invoice_id):
                 "[sub_total]": f"₹{total_invoice_amount:,.2f}",  # Try without brackets
                 "[CGST]": f"₹{total_cgst:,.2f}",
                 "[SGST]": f"₹{total_sgst:,.2f}",
-                "[IGST]": f"₹{total_igst:,.2f}",
                 "[TIA]": f"₹{grand_total:,.2f}"
             }
         else :
